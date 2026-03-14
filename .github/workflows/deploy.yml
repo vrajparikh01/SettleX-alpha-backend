@@ -1,0 +1,269 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  SettleX Backend — GitHub Actions CI/CD
+#
+#  Trigger : push to `main` branch
+#  Flow    : Build Docker image → Push to Docker Hub → SSH deploy to AWS EC2
+#
+#  Required GitHub Secrets (Settings → Secrets → Actions):
+#    DOCKER_HUB_USERNAME        Docker Hub username
+#    DOCKER_HUB_TOKEN           Docker Hub access token
+#    SERVER_HOST                EC2 public IP (e.g. 16.171.146.88)
+#    SERVER_USER                EC2 SSH user (e.g. ubuntu)
+#    SERVER_SSH_KEY             Full content of EC2 private key (.pem)
+#    SERVER_PORT                SSH port (usually 22)
+#    APP_DIR                    Deploy path on EC2 (e.g. /home/ubuntu/settlex)
+#    CERTBOT_EMAIL              Email for Let's Encrypt (e.g. you@gmail.com)
+#    NODE_ENV                   production
+#    PORT                       3000
+#    BASE_URL                   https://<SERVER_HOST>.nip.io  (e.g. https://16.171.146.88.nip.io)
+#    MONGODB_URL                MongoDB Atlas connection string
+#    JWT_SECRET                 JWT secret key
+#    JWT_ACCESS_EXPIRATION_MINUTES   30
+#    JWT_REFRESH_EXPIRATION_DAYS     30
+#    COINMARKET_CAP_API_KEY     CoinMarketCap API key
+#
+#  HOW SSL WORKS (fully automatic — no manual cert management):
+#    CI/CD uses nip.io (free DNS: 16.171.146.88.nip.io → 16.171.146.88)
+#    to get a real Let's Encrypt trusted certificate via certbot.
+#    This eliminates ERR_CERT_AUTHORITY_INVALID and Mixed Content errors.
+#    Frontend on Vercel (HTTPS) can call this API without any issues.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Deploy SettleX Backend
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKER_HUB_USERNAME }}/settlex-backend
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # JOB 1: Build & Push Docker Image to Docker Hub
+  # ────────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Extract Docker Metadata (tags & labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # JOB 2: Deploy to AWS EC2 via SSH
+  # ────────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to AWS EC2
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # ── Step 1: Write .env file on server ─────────────────────────────────
+      # NOTE: We write each line with printf to avoid YAML indentation
+      #       contaminating values inside a heredoc.
+      - name: Write .env to Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            set -e
+            APP_DIR="${{ secrets.APP_DIR }}"
+            mkdir -p "$APP_DIR"
+            ENV_FILE="$APP_DIR/.env"
+
+            echo "──── Writing .env ────"
+            # Write using printf per-line — immune to YAML indentation
+            printf 'NODE_ENV=%s\n'                        '${{ secrets.NODE_ENV }}'                        > "$ENV_FILE"
+            printf 'PORT=%s\n'                            '${{ secrets.PORT }}'                            >> "$ENV_FILE"
+            printf 'BASE_URL=%s\n'                        '${{ secrets.BASE_URL }}'                        >> "$ENV_FILE"
+            printf 'MONGODB_URL=%s\n'                     '${{ secrets.MONGODB_URL }}'                     >> "$ENV_FILE"
+            printf 'JWT_SECRET=%s\n'                      '${{ secrets.JWT_SECRET }}'                      >> "$ENV_FILE"
+            printf 'JWT_ACCESS_EXPIRATION_MINUTES=%s\n'   '${{ secrets.JWT_ACCESS_EXPIRATION_MINUTES }}'   >> "$ENV_FILE"
+            printf 'JWT_REFRESH_EXPIRATION_DAYS=%s\n'     '${{ secrets.JWT_REFRESH_EXPIRATION_DAYS }}'     >> "$ENV_FILE"
+            printf 'COINMARKET_CAP_API_KEY=%s\n'          '${{ secrets.COINMARKET_CAP_API_KEY }}'          >> "$ENV_FILE"
+            printf 'DOCKER_IMAGE=%s\n'                    '${{ secrets.DOCKER_HUB_USERNAME }}/settlex-backend:latest' >> "$ENV_FILE"
+            echo "[✓] .env written"
+            echo "[✓] .env contents (keys only):"
+            cut -d= -f1 "$ENV_FILE"
+
+      # ── Step 2: Get Let's Encrypt trusted certificate via certbot + nip.io ──
+      # nip.io maps any IP to a real domain for free:
+      #   16.171.146.88.nip.io  →  resolves to  16.171.146.88
+      # certbot gets a real CA-trusted cert — fixes Mixed Content + ERR_CERT errors.
+      - name: Obtain Let's Encrypt Certificate (nip.io)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          command_timeout: 5m
+          script: |
+            set -e
+            DOMAIN="${{ secrets.SERVER_HOST }}.nip.io"
+            CERT_DIR="${{ secrets.APP_DIR }}/nginx/certs"
+            mkdir -p "$CERT_DIR"
+
+            # Install certbot if missing
+            if ! command -v certbot &>/dev/null; then
+              echo "[cert] Installing certbot..."
+              sudo apt-get update -qq
+              sudo apt-get install -y -qq certbot
+            fi
+
+            # Check if a valid (7+ days) cert already exists for this domain
+            LIVE="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+            if [[ -f "$LIVE" ]] && openssl x509 -checkend 604800 -noout -in "$LIVE" 2>/dev/null; then
+              echo "[cert] Valid Let's Encrypt cert exists for $DOMAIN — skipping"
+            else
+              echo "[cert] Obtaining Let's Encrypt cert for $DOMAIN..."
+              # Stop nginx so certbot can bind port 80 for the ACME challenge
+              cd "${{ secrets.APP_DIR }}" && docker compose stop nginx 2>/dev/null || true
+              sudo certbot certonly \
+                --standalone \
+                --non-interactive \
+                --agree-tos \
+                --email "${{ secrets.CERTBOT_EMAIL }}" \
+                -d "$DOMAIN"
+              echo "[✓] Certificate obtained for $DOMAIN"
+            fi
+
+            # Copy latest certs to nginx/certs/ (nginx container reads from here)
+            sudo cp "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "$CERT_DIR/cert.pem"
+            sudo cp "/etc/letsencrypt/live/$DOMAIN/privkey.pem"   "$CERT_DIR/private.key"
+            sudo chmod 644 "$CERT_DIR/cert.pem"
+            sudo chmod 600 "$CERT_DIR/private.key"
+            sudo chown "$USER:$USER" "$CERT_DIR/cert.pem" "$CERT_DIR/private.key"
+            echo "[✓] Certs copied to $CERT_DIR"
+
+            # Set up auto-renewal cron (runs twice daily; copies renewed cert + restarts nginx)
+            CRON_CMD="0 */12 * * * sudo certbot renew --quiet && sudo cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem $CERT_DIR/cert.pem && sudo cp /etc/letsencrypt/live/$DOMAIN/privkey.pem $CERT_DIR/private.key && cd ${{ secrets.APP_DIR }} && docker compose restart nginx"
+            (crontab -l 2>/dev/null | grep -v 'certbot renew'; echo "$CRON_CMD") | crontab -
+            echo "[✓] Auto-renewal cron configured"
+
+      # ── Step 3: Copy docker-compose + nginx config to server ──────────────
+      - name: Copy Compose & Nginx Config to Server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          source: "docker-compose.yml,nginx/nginx.conf"
+          target: ${{ secrets.APP_DIR }}
+          strip_components: 0
+
+      # ── Step 4: Pull image and restart containers ──────────────────────────
+      - name: Deploy with Docker Compose
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            set -e
+            APP_DIR="${{ secrets.APP_DIR }}"
+            cd "$APP_DIR"
+
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "  SettleX Backend — Starting Docker Deployment  "
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+            # Log in to Docker Hub on server
+            echo "${{ secrets.DOCKER_HUB_TOKEN }}" | docker login -u "${{ secrets.DOCKER_HUB_USERNAME }}" --password-stdin
+
+            # Pull latest image
+            echo "[1/4] Pulling latest image..."
+            docker compose pull app
+
+            # Restart containers (zero-downtime: new container starts before old stops)
+            echo "[2/4] Restarting app container..."
+            docker compose up -d --remove-orphans
+
+            # Force nginx to reload the new config file from disk
+            # (docker compose up -d does NOT reload nginx when only mounted files change)
+            echo "[3/4] Reloading nginx with new config..."
+            docker compose restart nginx
+
+            # Clean up old/dangling images
+            echo "[4/4] Pruning old images..."
+            docker image prune -f
+
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "  ✓ Deployment Complete!"
+            echo "  Container status:"
+            docker compose ps
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      # ── Step 5: Verify deployment health ──────────────────────────────────
+      - name: Verify Deployment Health
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            set -e
+            APP_DIR="${{ secrets.APP_DIR }}"
+            cd "$APP_DIR"
+
+            DOMAIN="${{ secrets.SERVER_HOST }}.nip.io"
+            echo "Waiting for app to be healthy..."
+            for i in $(seq 1 12); do
+              # Check via HTTPS on the nip.io domain (matches the Let's Encrypt cert)
+              RESP=$(curl -s --max-time 5 https://$DOMAIN/health 2>/dev/null || echo "")
+              if echo "$RESP" | grep -q '"status":"ok"'; then
+                echo "  Attempt $i/12 — PASSED"
+                echo "[✓] Health check passed — https://$DOMAIN is live!"
+                docker compose ps
+                exit 0
+              else
+                echo "  Attempt $i/12 — waiting..."
+              fi
+              sleep 5
+            done
+            echo "[!] Health check failed after 60s"
+            docker compose logs --tail=50 app
+            exit 1
