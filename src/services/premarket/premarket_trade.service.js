@@ -20,15 +20,15 @@ const getTrades = async (skip, limit, name, chain_id, type) => {
     // user_id: {$ne: new ObjectId(user_id)},
   }
 
-  if(chain_id) {
+  if (chain_id) {
     Object.assign(matchQuery, { chain_id: Number(chain_id) });
   }
 
   if (type !== 'all') {
-    matchQuery.trade_type = type=="buy" ? 0 : 1; 
+    matchQuery.trade_type = type == "buy" ? 0 : 1;
   }
 
-  if(name) {
+  if (name) {
     matchQuery.$or = []
     const tokens = await PreMarketCryptoToken.find({ $or: [{ name: { $regex: name, $options: "i" } }, { name: { $regex: name, $options: "i" } }] });
     const tokenIds = tokens.map(token => token._id);
@@ -81,10 +81,10 @@ const getTrades = async (skip, limit, name, chain_id, type) => {
       $unwind: "$receive_token",
     },
     {
-      $unwind: "$deal_creator",
+      $unwind: { path: "$deal_creator", preserveNullAndEmptyArrays: true },
     },
     {
-      $unwind: "$chain",
+      $unwind: { path: "$chain", preserveNullAndEmptyArrays: true },
     },
     {
       $sort: {
@@ -151,7 +151,10 @@ const getTrades = async (skip, limit, name, chain_id, type) => {
       },
     },
   ]);
-  return {trades, totalTrades};
+
+  console.log("trades ", trades)
+  console.log("totalTrades ", totalTrades)
+  return { trades, totalTrades };
 };
 
 const getUsersTrades = async (skip, limit, name, user_id, chain_id) => {
@@ -162,11 +165,11 @@ const getUsersTrades = async (skip, limit, name, user_id, chain_id) => {
     user_id: new ObjectId(user_id),
   }
 
-  if(chain_id) {
+  if (chain_id) {
     Object.assign(matchQuery, { chain_id: Number(chain_id) });
   }
 
-  if(name) {
+  if (name) {
     matchQuery.$or = []
     const tokens = await PreMarketCryptoToken.find({ $or: [{ name: { $regex: name, $options: "i" } }, { name: { $regex: name, $options: "i" } }] });
     const tokenIds = tokens.map(token => token._id);
@@ -219,10 +222,10 @@ const getUsersTrades = async (skip, limit, name, user_id, chain_id) => {
       $unwind: "$receive_token",
     },
     {
-      $unwind: "$deal_creator",
+      $unwind: { path: "$deal_creator", preserveNullAndEmptyArrays: true },
     },
     {
-      $unwind: "$chain",
+      $unwind: { path: "$chain", preserveNullAndEmptyArrays: true },
     },
     {
       $sort: {
@@ -291,7 +294,7 @@ const getUsersTrades = async (skip, limit, name, user_id, chain_id) => {
       },
     },
   ]);
-  return {trades, totalTrades};
+  return { trades, totalTrades };
 };
 
 const increaseViewCount = async (tradeId) => {
@@ -310,7 +313,7 @@ const cancelTrade = async (tradeId) => {
   return trade;
 };
 
- 
+
 
 
 
