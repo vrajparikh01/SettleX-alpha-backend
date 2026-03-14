@@ -1,0 +1,13 @@
+module.exports.authService = require('./auth.service');
+module.exports.tokenService = require('./token.service');
+module.exports.userService = require('./user.service');
+module.exports.cryptoTokenService = require('./otc/cryptotoken.service');
+module.exports.tradesService = require('./otc/trades.service');
+module.exports.offerService = require('./offer.services');
+module.exports.activityService = require('./otc/activity.service');
+module.exports.portfolioService = require('./portfolio.service');
+module.exports.preMarketTokenService = require('./premarket/premarkettoken.service');
+module.exports.preMarketTradeService = require('./premarket/premarket_trade.service');
+module.exports.preMarketActivityService = require('./premarket/premarket_activity.service');
+module.exports.chainService = require('./chain.service');
+module.exports.brokersLinkService = require('./otc/brokerlinks.service');
