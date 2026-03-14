@@ -1,0 +1,12 @@
+module.exports.Token = require('./token.model');
+module.exports.User = require('./user.model');
+module.exports.CryptoToken = require('./otc/cryptotoken.model');
+module.exports.Portfolio = require('./portfolio.model');
+module.exports.Trades = require('./otc/trade.model');
+module.exports.Offers = require('./offers.model');
+module.exports.Activity = require('./otc/activity.model');
+module.exports.PreMarketCryptoToken = require('./premarket/premarketcryptotoken.model');
+module.exports.PreMarketTrade = require('./premarket/premarket_trade.model');
+module.exports.PreMarketActivity = require('./premarket/premarket_activity.model');
+module.exports.ChainList = require('./chain.model');
+module.exports.BrokerLinks = require('./otc/broker_link.model');
