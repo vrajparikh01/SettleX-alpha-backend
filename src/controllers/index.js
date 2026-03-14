@@ -1,0 +1,12 @@
+module.exports.authController = require('./auth.controller');
+module.exports.userController = require('./user.controller');
+module.exports.cryptoTokenController = require('./otc/cryptotoken.controller');
+module.exports.tradeController = require('./otc/trades.controller');
+module.exports.offerController = require('./offer.controller');
+module.exports.activityController = require('./otc/activity.controller');
+module.exports.portfolioController = require('./portfolio.controller');
+module.exports.PreMarketTokenController = require('./premarket/premarkettoken.controller');
+module.exports.PreMarketTradeController = require('./premarket/premarket_trade.controller');
+module.exports.PreMarketActivityController = require('./premarket/premarket_activity.controller');
+module.exports.chainController = require('./chain.controller');
+module.exports.brokersLinkController = require('./otc/brokerlinks.controller');
